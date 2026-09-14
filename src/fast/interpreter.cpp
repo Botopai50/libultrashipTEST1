@@ -175,6 +175,32 @@ void Interpreter::Flush() {
         // when the bound shader is a toon variant, so it is a no-op for ordinary draws.
         mRapi->SetToonLighting(mRsp->toon_light_dir, mRsp->toon_light_color, mRsp->toon_ambient);
         mRapi->SetToonLocalLights(mRsp->toon_local_lights);
+        // SOH [Enhancement] Push the camera matrix for the shadow capture's receiver.
+        //
+        // HERE, and not where the cascades are built, which is where it was and where it was wrong. That
+        // hook runs before the frame's own scene draws, so the matrix in effect there belongs to a
+        // different projection than the one that fills the depth buffer -- and the capture reconstructed
+        // every surface thirty world units off, measured against both the actor bounds and the caster
+        // layers. At the flush the matrix in hand is by construction the matrix these triangles are about
+        // to be transformed by.
+        //
+        // Aspect adjusted on the way out: every vertex reaches the screen through AdjXForAspectRatio, which
+        // divides clip x, so the matrix as the game stores it does not describe the picture drawn. Scaling
+        // the x COLUMN is that division applied to the matrix -- in this row-vector convention clip.x is the
+        // dot of the point with column 0, so it scales clip.x and nothing else.
+        //
+        // Guarded on the matrix actually changing, because this runs per batch and almost never differs.
+        if (memcmp(mCameraVpPushed, mRsp->P_matrix, sizeof(mCameraVpPushed)) != 0) {
+            memcpy(mCameraVpPushed, mRsp->P_matrix, sizeof(mCameraVpPushed));
+            const float adjOut = AdjXForAspectRatio(1.0f);
+            float cameraVp[16];
+            for (int r = 0; r < 4; r++) {
+                for (int c = 0; c < 4; c++) {
+                    cameraVp[r * 4 + c] = mRsp->P_matrix[r][c] * (c == 0 ? adjOut : 1.0f);
+                }
+            }
+            mRapi->SetCameraViewProj(cameraVp);
+        }
         mRapi->DrawTriangles(mBufVbo, mBufVboLen, mBufVboNumTris);
         mBufVboLen = 0;
         mBufVboNumTris = 0;
@@ -4482,29 +4508,6 @@ void Interpreter::RenderShadowMap() {
         mRapi->SetShadowMapParams(nullptr, nullptr, 0, mShadowMapBlendFraction,
                                   mShadowMapStrength, mShadowMapDebug);
         return;
-    }
-
-    // SOH [Enhancement] Hand the camera matrix to the backend, for the shadow capture's receiver.
-    //
-    // Done here because here is the only place that has it: the backend is given the LIGHT's matrices and
-    // never the camera's, so a capture taken down there could say where every caster stood and not where the
-    // frame was viewed from -- and the scene depth it writes alongside is only a set of world positions once
-    // there is a matrix to unproject it through.
-    //
-    // Adjusted for aspect on the way out, for the same reason the corners below are. Every vertex reaches
-    // the screen through AdjXForAspectRatio, which divides clip x, so the matrix as the game stores it does
-    // not describe the picture that was drawn. Scaling the x COLUMN is that division applied to the matrix:
-    // in this row-vector convention clip.x is the dot of the point with column 0, so scaling the column
-    // scales clip.x and nothing else.
-    {
-        const float adjOut = AdjXForAspectRatio(1.0f);
-        float cameraVp[16];
-        for (int r = 0; r < 4; r++) {
-            for (int c = 0; c < 4; c++) {
-                cameraVp[r * 4 + c] = mRsp->P_matrix[r][c] * (c == 0 ? adjOut : 1.0f);
-            }
-        }
-        mRapi->SetCameraViewProj(cameraVp);
     }
 
     // Two points on the view axis give the camera position and the direction it looks.

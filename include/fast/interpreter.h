@@ -854,6 +854,8 @@ class Interpreter {
     bool mDroppedFrame{};
     float* mBufVbo; // 3 vertices per triangle, VBO_MAX_FLOATS_PER_VERTEX floats per vertex
     size_t mBufVboLen{};
+    // Last camera matrix pushed to the backend, so the per-batch push can skip when nothing moved.
+    float mCameraVpPushed[4][4] = {};
     size_t mBufVboNumTris{};
     // SOH [Enhancement] Actor shadow: world-space positions of the current object's triangles (9 floats
     // per tri), accumulated as the object draws and drained by FlushToonShadow at each object boundary.

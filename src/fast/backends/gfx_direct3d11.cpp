@@ -1273,6 +1273,12 @@ void GfxRenderingAPIDX11::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, siz
             mFramebufferDepthDraws.resize(mFrameBuffers.size(), 0);
         }
         mFramebufferDepthDraws[mCurrentFramebuffer]++;
+        // Snapshot the matrix WITH the draw. The depth buffer and the matrix have to come from the same
+        // draws or the reconstruction is off by however much the camera differs between them.
+        if (mCameraViewProjValid) {
+            memcpy(mSceneViewProj, mCameraViewProj, sizeof(mSceneViewProj));
+            mSceneViewProjValid = true;
+        }
     }
 
     // SOH [Enhancement] World light casting: also rebuild when the stencil mode changes. The decal
@@ -1575,6 +1581,7 @@ void GfxRenderingAPIDX11::StartFrame() {
     // Which framebuffer is the scene's is a per-frame fact, so it is re-learned every frame rather than
     // remembered: a capture must not be able to read last frame's target.
     std::fill(mFramebufferDepthDraws.begin(), mFramebufferDepthDraws.end(), 0);
+    mSceneViewProjValid = false;
     mSceneFramebuffer = -1;
     mSceneFramebufferDraws = 0;
     ShadowTimerFrameBegin();
@@ -1639,8 +1646,8 @@ void GfxRenderingAPIDX11::FinishShadowCapture() {
     // capture without a receiver is still the capture this tool had before -- so each one is recorded by
     // name in the metadata and the capture is finished, never discarded.
     try {
-        if (!mCameraViewProjValid) {
-            throw std::runtime_error("No camera matrix this frame");
+        if (!mSceneViewProjValid) {
+            throw std::runtime_error("No camera matrix accompanied the scene draws");
         }
         if (mSceneFramebuffer < 0 || (size_t)mSceneFramebuffer >= mFrameBuffers.size()) {
             throw std::runtime_error("No framebuffer took a depth-writing draw this frame");
@@ -1665,7 +1672,7 @@ void GfxRenderingAPIDX11::FinishShadowCapture() {
         depthTexture->GetDesc(&desc);
         metadata["camera_layer"] = "camera.sds";
         metadata["camera_size"] = { desc.Width, desc.Height };
-        metadata["camera_view_proj"] = mCameraViewProj;
+        metadata["camera_view_proj"] = mSceneViewProj;
         metadata["camera_msaa"] = fb.msaa_level;
         // Which target this came from and how much was drawn into it. A receiver that turns out empty is
         // then answerable from the file itself, instead of costing another capture to find out.

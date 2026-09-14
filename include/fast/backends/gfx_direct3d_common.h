@@ -362,6 +362,10 @@ class GfxRenderingAPIDX11 final : public GfxRenderingAPI {
     // shadow pass -- which is what "the scene" means here.
     // Counted per target rather than "the last one wins": a single stray depth-writing draw late in the
     // frame would otherwise take the title from the target that received the whole scene.
+    // The camera matrix that was in effect for those draws, snapshotted with them. Taking whatever matrix
+    // happened to be current at EndFrame would pick up the HUD's, which shares nothing with the scene.
+    float mSceneViewProj[16] = {};
+    bool mSceneViewProjValid = false;
     std::vector<int> mFramebufferDepthDraws;
     int mSceneFramebuffer = -1;
     int mSceneFramebufferDraws = 0;
