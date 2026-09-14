@@ -180,6 +180,8 @@ class GfxRenderingAPIDX11 final : public GfxRenderingAPI {
     // and never the frame.
     bool EnsureShadowMapViewPipeline();
     void DrawShadowMapView();
+    // Phase two of the shadow capture: the scene depth and the camera matrix. See the definition.
+    void FinishShadowCapture();
     // Picks between a texture's full and top-level-only samplers for the current draw.
     const Microsoft::WRL::ComPtr<ID3D11SamplerState>& SamplerFor(uint32_t textureId);
     void SetDepthTestAndMask(bool depth_test, bool z_upd) override;
@@ -343,6 +345,17 @@ class GfxRenderingAPIDX11 final : public GfxRenderingAPI {
     //
     // Every entry is dropped whenever the cascade array is (re)built: the new texture holds nothing, and a
     // record claiming otherwise would leave a slice permanently empty.
+    // SOH [Enhancement] Shadow capture, phase one. The caster layers are written during the shadow pass,
+    // but the RECEIVER -- the scene's own depth buffer -- does not exist yet at that point in the frame:
+    // the shadow pass runs before the scene is drawn. So the capture is left pending here and finished in
+    // EndFrame, where the scene is complete and its depth is still bound.
+    //
+    // The metadata rides as its serialized string rather than as a json object, to keep nlohmann out of a
+    // header this widely included; it is parsed back once, per capture, to have the camera fields added.
+    // capture.json is written only in phase two, which is what keeps "complete" meaning complete.
+    std::string mPendingCaptureDir;
+    std::string mPendingCaptureMeta;
+    bool mCapturePending = false;
     float mShadowSliceMatrix[SHADOW_MAP_MAX_SLICES][16] = {};
     uint64_t mShadowSliceKey[SHADOW_MAP_MAX_SLICES] = {};
     const void* mShadowSliceRasterState[SHADOW_MAP_MAX_SLICES] = {};

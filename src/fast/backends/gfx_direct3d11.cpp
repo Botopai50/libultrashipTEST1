@@ -1578,8 +1578,95 @@ void GfxRenderingAPIDX11::EndFrame() {
     // the frame would be drawing into a picture that later passes overwrite, and anywhere later would mean
     // this pass having to know which framebuffer is the final one -- which it has no business knowing.
     DrawShadowMapView();
+    FinishShadowCapture();
     ShadowTimerFrameEnd();
     mContext->Flush();
+}
+
+// SOH [Enhancement] Shadow capture, phase two: the receiver.
+//
+// The shadow map cannot supply one. It stores the surface NEAREST THE LIGHT, so unprojecting it gives back
+// the lit surface and nothing else -- the wall standing in the castle's shadow is behind the castle along
+// the light and was never written to it. Reproduced from the caster layers alone, almost nothing can come
+// back occluded, which is correct and useless.
+//
+// The scene's depth buffer is the other half. It holds every surface the camera can see, shadowed ones
+// included, so with the camera matrix beside it the reproduction can put the shadow where it actually
+// falls instead of on an invented plane.
+//
+// Runs here because here is the first moment it exists: the shadow pass, where phase one runs, is earlier
+// in the frame than the scene it would be capturing.
+void GfxRenderingAPIDX11::FinishShadowCapture() {
+    if (!mCapturePending) {
+        return;
+    }
+    auto cvars = Ship::Context::GetInstance()->GetConsoleVariables();
+    nlohmann::json metadata = nlohmann::json::parse(mPendingCaptureMeta, nullptr, false);
+    if (metadata.is_discarded()) {
+        metadata = nlohmann::json::object();
+    }
+    const std::filesystem::path dir(mPendingCaptureDir);
+    std::string note;
+
+    // Every failure below costs the receiver and nothing else. The caster layers are already on disk and a
+    // capture without a receiver is still the capture this tool had before -- so each one is recorded by
+    // name in the metadata and the capture is finished, never discarded.
+    try {
+        if (!mCameraViewProjValid) {
+            throw std::runtime_error("No camera matrix this frame");
+        }
+        if (mCurrentFramebuffer < 0 || (size_t)mCurrentFramebuffer >= mFrameBuffers.size()) {
+            throw std::runtime_error("No current framebuffer");
+        }
+        FramebufferDX11& fb = mFrameBuffers[mCurrentFramebuffer];
+        if (!fb.has_depth_buffer || fb.depth_stencil_view == nullptr) {
+            throw std::runtime_error("The scene target carries no depth buffer");
+        }
+        Microsoft::WRL::ComPtr<ID3D11Resource> resource;
+        fb.depth_stencil_view->GetResource(resource.GetAddressOf());
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> depthTexture;
+        if (resource == nullptr || FAILED(resource.As(&depthTexture))) {
+            throw std::runtime_error("Scene depth is not a 2D texture");
+        }
+        std::ofstream camera(dir / "camera.sds", std::ios::binary);
+        WriteSceneDepthCapture(mDevice.Get(), mContext.Get(), depthTexture.Get(), camera);
+        camera.close();
+        if (!camera) {
+            throw std::runtime_error("Cannot finish scene depth file");
+        }
+        D3D11_TEXTURE2D_DESC desc{};
+        depthTexture->GetDesc(&desc);
+        metadata["camera_layer"] = "camera.sds";
+        metadata["camera_size"] = { desc.Width, desc.Height };
+        metadata["camera_view_proj"] = mCameraViewProj;
+        metadata["camera_msaa"] = fb.msaa_level;
+    } catch (const std::exception& error) {
+        note = error.what();
+        metadata["camera_layer"] = nullptr;
+        metadata["camera_note"] = note;
+        SPDLOG_WARN("Shadow capture: no receiver ({})", note);
+    }
+
+    metadata["complete"] = true;
+    std::string status;
+    try {
+        std::ofstream info(dir / "capture.json");
+        info << metadata.dump(2);
+        info.close();
+        if (!info) {
+            throw std::runtime_error("Cannot finish capture metadata");
+        }
+        status = note.empty() ? dir.string() : (dir.string() + " (sem receptor: " + note + ")");
+        SPDLOG_INFO("Shadow capture saved: {}", dir.string());
+    } catch (const std::exception& error) {
+        status = std::string("Capture failed: ") + error.what();
+        SPDLOG_ERROR("{}", status);
+    }
+    cvars->SetString(SHADOW_MAP_CAPTURE_STATUS_CVAR, status.c_str());
+
+    mCapturePending = false;
+    mPendingCaptureDir.clear();
+    mPendingCaptureMeta.clear();
 }
 
 void GfxRenderingAPIDX11::FinishRender() {
@@ -3523,7 +3610,10 @@ void GfxRenderingAPIDX11::SetShadowMapParams(const float* viewProj, const float*
 
     // SHADOW-CAPTURE-BEGIN
     auto captureCVars = Ship::Context::GetInstance()->GetConsoleVariables();
-    if (captureCVars->GetInteger(SHADOW_MAP_CAPTURE_REQUEST_CVAR, 0) != 0) {
+    // A request is left ARMED while one is pending rather than consumed, so a second click during the one
+    // frame a capture straddles does not orphan the first one's directory half-written. EndFrame clears the
+    // pending flag, so the next frame picks this up.
+    if (captureCVars->GetInteger(SHADOW_MAP_CAPTURE_REQUEST_CVAR, 0) != 0 && !mCapturePending) {
         captureCVars->SetInteger(SHADOW_MAP_CAPTURE_REQUEST_CVAR, 0);
         try {
             if (count <= 0 || mShadowMapTexture == nullptr)
@@ -3622,12 +3712,16 @@ void GfxRenderingAPIDX11::SetShadowMapParams(const float* viewProj, const float*
                 metadata["slice_valid"].push_back(mShadowSliceValid[slice]);
                 metadata["slice_matrices"].push_back(mShadowSliceMatrix[slice]);
             }
-            std::ofstream info(dir / "capture.json");
-            info << metadata.dump(2);
-            info.close();
-            if (!info) throw std::runtime_error("Cannot finish capture metadata");
-            captureCVars->SetString(SHADOW_MAP_CAPTURE_STATUS_CVAR, dir.string().c_str());
-            SPDLOG_INFO("Shadow capture saved: {}", dir.string());
+            // Phase one ends here. capture.json is NOT written yet: the receiver this capture exists to
+            // provide -- the scene's own depth buffer -- has not been drawn at this point in the frame, and
+            // a capture.json on disk marked complete without it would be exactly the half-capture this
+            // change is undoing. EndFrame finishes both.
+            mPendingCaptureDir = dir.string();
+            mPendingCaptureMeta = metadata.dump();
+            mCapturePending = true;
+            captureCVars->SetString(SHADOW_MAP_CAPTURE_STATUS_CVAR,
+                                    "Camadas gravadas; aguardando o fim do quadro para a cena...");
+            SPDLOG_INFO("Shadow capture staged: {}", dir.string());
         } catch (const std::exception& error) {
             const std::string message = std::string("Capture failed: ") + error.what();
             captureCVars->SetString(SHADOW_MAP_CAPTURE_STATUS_CVAR, message.c_str());

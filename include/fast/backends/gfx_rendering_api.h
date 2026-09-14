@@ -315,6 +315,28 @@ class GfxRenderingAPI {
         mShadowDebug = debugMode;
     }
 
+    // SOH [Enhancement] The camera's combined view-projection, for the shadow capture's receiver.
+    //
+    // The interpreter never sees a separate view matrix -- only the product the game hands it -- and the
+    // backend never sees even that, so a capture taken in the backend could say where every caster was and
+    // not where the camera stood. Without it the scene depth written alongside is unusable: a depth buffer
+    // is only a set of world positions once there is a matrix to unproject it through.
+    //
+    // Already adjusted for aspect ratio by the caller. Every vertex reaches the screen through
+    // AdjXForAspectRatio, so the matrix as the game stores it does NOT describe the picture that was drawn;
+    // the edge of the screen is further out than its NDC +/-1. Adjusting at the source keeps the one place
+    // that knows about that division in charge of it.
+    virtual void SetCameraViewProj(const float* viewProj) {
+        if (viewProj == nullptr) {
+            mCameraViewProjValid = false;
+            return;
+        }
+        for (int i = 0; i < 16; i++) {
+            mCameraViewProj[i] = viewProj[i];
+        }
+        mCameraViewProjValid = true;
+    }
+
     // SOH [Enhancement] Turns the shadow map's GPU timing on WITHOUT the cascade-bounds debug view.
     //
     // The two used to be the same switch, which made the pass impossible to measure honestly: the debug
@@ -473,6 +495,9 @@ class GfxRenderingAPI {
     // SetShadowMapParams. mShadowCascadesActive == 0 means "no shadow map this frame", which is the
     // state every backend that does not implement the depth pass stays in forever.
     float mShadowViewProj[SHADOW_MAP_MAX_CASCADES * 16] = {};
+    // The camera matrix above, and whether this frame supplied one. Row-major, row-vector, aspect adjusted.
+    float mCameraViewProj[16] = {};
+    bool mCameraViewProjValid = false;
     float mShadowSplits[SHADOW_MAP_MAX_CASCADES] = {};
     // World size of one texel in each cascade, recovered from its own projection. Filled by the
     // backend beside the shader constants; see ShadowMapCascadeReport.

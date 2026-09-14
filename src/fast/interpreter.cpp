@@ -4484,6 +4484,29 @@ void Interpreter::RenderShadowMap() {
         return;
     }
 
+    // SOH [Enhancement] Hand the camera matrix to the backend, for the shadow capture's receiver.
+    //
+    // Done here because here is the only place that has it: the backend is given the LIGHT's matrices and
+    // never the camera's, so a capture taken down there could say where every caster stood and not where the
+    // frame was viewed from -- and the scene depth it writes alongside is only a set of world positions once
+    // there is a matrix to unproject it through.
+    //
+    // Adjusted for aspect on the way out, for the same reason the corners below are. Every vertex reaches
+    // the screen through AdjXForAspectRatio, which divides clip x, so the matrix as the game stores it does
+    // not describe the picture that was drawn. Scaling the x COLUMN is that division applied to the matrix:
+    // in this row-vector convention clip.x is the dot of the point with column 0, so scaling the column
+    // scales clip.x and nothing else.
+    {
+        const float adjOut = AdjXForAspectRatio(1.0f);
+        float cameraVp[16];
+        for (int r = 0; r < 4; r++) {
+            for (int c = 0; c < 4; c++) {
+                cameraVp[r * 4 + c] = mRsp->P_matrix[r][c] * (c == 0 ? adjOut : 1.0f);
+            }
+        }
+        mRapi->SetCameraViewProj(cameraVp);
+    }
+
     // Two points on the view axis give the camera position and the direction it looks.
     float nearC[3], farC[3];
     if (!ShadowUnproject(invVp, 0.0f, 0.0f, 0.0f, nearC) || !ShadowUnproject(invVp, 0.0f, 0.0f, 1.0f, farC)) {
