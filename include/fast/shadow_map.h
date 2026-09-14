@@ -444,6 +444,10 @@
 // One-shot capture requests are consumed by the DirectX backend; not saved settings.
 #define SHADOW_MAP_CAPTURE_REQUEST_CVAR "gFast.ShadowCapture.Request"
 #define SHADOW_MAP_CAPTURE_STATUS_CVAR "gFast.ShadowCapture.Status"
+// What produced the capture, as a JSON object the game stamps BEFORE it raises the request above. The
+// backend cannot reach into the game's state -- scene, time of day, which binary this is -- so the game
+// hands it over through this CVar and the backend copies it into capture.json's game_context.
+#define SHADOW_MAP_CAPTURE_CONTEXT_CVAR "gFast.ShadowCapture.Context"
 
 #define SHADOW_MAP_MAX_DEBUG_VIEW 7
 
