@@ -1,0 +1,3 @@
+# Patches are applied byte-for-byte to upstream sources by git apply. Some of those
+# sources are CRLF, so the context lines here must keep their CRLF. Never normalize.
+*.patch -text
