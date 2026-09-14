@@ -3565,6 +3565,22 @@ void GfxRenderingAPIDX11::SetShadowMapParams(const float* viewProj, const float*
             }
 
             nlohmann::json metadata;
+            // What produced this capture. The game stamps it into a CVar as a JSON string before raising
+            // the request, because the backend cannot reach into scene, time of day or build identity on
+            // its own. Parsed back here so capture.json carries a real object rather than an escaped blob.
+            //
+            // The parse is the non-throwing overload on purpose: the depth files are already on disk by
+            // this point, and a malformed context is not worth losing a capture over. An unparseable value
+            // is kept verbatim under game_context_raw so nothing is silently dropped.
+            const std::string capturedContext =
+                captureCVars->GetString(SHADOW_MAP_CAPTURE_CONTEXT_CVAR, "{}");
+            nlohmann::json gameContext = nlohmann::json::parse(capturedContext, nullptr, false);
+            if (gameContext.is_discarded()) {
+                metadata["game_context"] = nlohmann::json::object();
+                metadata["game_context_raw"] = capturedContext;
+            } else {
+                metadata["game_context"] = std::move(gameContext);
+            }
             metadata["actor_layer"] = actorsWritten ? "actors.sds" : nullptr;
             metadata["actor_slices"] = actorCount;
             metadata["actor_own_texture"] = mShadowActorTexture != nullptr;
