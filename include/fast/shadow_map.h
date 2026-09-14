@@ -235,8 +235,25 @@
 //
 // 1.0 is one polygon gradient across one texel, the least this term can be and still mean anything. It has
 // been 4.0 and 2.0 in earlier revisions, when a stack of other bias terms sat on top of it; with those gone
-// this may well need to move. It is a starting point, not a tuned value.
-#define SHADOW_MAP_SLOPE_BIAS 1.0f
+// it needed to move, and 2.0 is where measurement put it.
+//
+// Measured in tools/shadow-sim on the ShadowCap1 capture, per pixel, splitting receivers by whether a
+// genuine occluder stands in front of them (gap wider than 1.5 * texelWorld * tan(theta), the depth the
+// surface's own slope accounts for) or only their own surface does. Raising this to 2.0 lifts coverage on
+// the self-shadowing set from 0.249 to between 0.68 and 0.83 while the genuinely occluded set moves only
+// from 0.045 to between 0.081 and 0.101 -- ten to twelve units of acne cleared per unit of real shadow
+// lost. Every receiver-side knob measured on the same capture trades closer to one for one.
+//
+// The range on each figure is a bracket, not noise: the rasterizer computes MaxDepthSlope per triangle
+// and a capture cannot, so the two ends are a min-mod gradient of the stored depth (which under-reads a
+// convex edge) and the raw gradient (which over-reads a silhouette). The real value lies between, and
+// both ends agree on the trade.
+//
+// What this does NOT fix, measured the same way: the serrated band where a grazing wall crosses from lit
+// to shadowed. Both ends of the bracket leave it untouched. Its teeth are the quantised boundary, one
+// texel of which displaces the edge along the wall by texelWorld * tan(theta) -- 24 world units in
+// cascade 1 here. No bias reaches that; only a smaller texel does.
+#define SHADOW_MAP_SLOPE_BIAS 2.0f
 
 // Front-face culling was implemented here and removed. It ends self-shadowing acne at its source rather
 // than biasing it out of sight -- store only the BACK of each caster and the surface the light strikes is
