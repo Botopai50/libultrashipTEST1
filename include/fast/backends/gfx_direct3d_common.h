@@ -353,6 +353,18 @@ class GfxRenderingAPIDX11 final : public GfxRenderingAPI {
     // The metadata rides as its serialized string rather than as a json object, to keep nlohmann out of a
     // header this widely included; it is parsed back once, per capture, to have the camera fields added.
     // capture.json is written only in phase two, which is what keeps "complete" meaning complete.
+    // The framebuffer the SCENE was rasterised into, which is not the one bound at EndFrame.
+    //
+    // The first version of this capture read mCurrentFramebuffer there and got a depth buffer of exactly
+    // one value, 1.0, in every one of its two million texels: by EndFrame the bound target is the final
+    // presentation surface, whose depth was cleared and never written, because a fullscreen blit does not
+    // write depth. Identified instead by the draws themselves -- geometry that writes depth, outside the
+    // shadow pass -- which is what "the scene" means here.
+    // Counted per target rather than "the last one wins": a single stray depth-writing draw late in the
+    // frame would otherwise take the title from the target that received the whole scene.
+    std::vector<int> mFramebufferDepthDraws;
+    int mSceneFramebuffer = -1;
+    int mSceneFramebufferDraws = 0;
     std::string mPendingCaptureDir;
     std::string mPendingCaptureMeta;
     bool mCapturePending = false;

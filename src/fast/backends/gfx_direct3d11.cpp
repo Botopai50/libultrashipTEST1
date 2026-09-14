@@ -1261,6 +1261,19 @@ void GfxRenderingAPIDX11::SetUseAlpha(bool use_alpha) {
 }
 
 void GfxRenderingAPIDX11::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, size_t buf_vbo_num_tris) {
+    // SOH [Enhancement] Note the scene's framebuffer for the shadow capture's receiver. Three conditions,
+    // and each one excludes something that would otherwise be mistaken for the scene: not the shadow depth
+    // pass (it writes depth too, into its own target); writing depth (a fullscreen blit does not, which is
+    // what makes the presentation surface look like a scene otherwise); and a target that actually has a
+    // depth buffer to read back.
+    if (!mShadowPassActive && mCurrentDepthMask != 0 && mCurrentFramebuffer >= 0 &&
+        (size_t)mCurrentFramebuffer < mFrameBuffers.size() &&
+        mFrameBuffers[mCurrentFramebuffer].has_depth_buffer) {
+        if (mFramebufferDepthDraws.size() < mFrameBuffers.size()) {
+            mFramebufferDepthDraws.resize(mFrameBuffers.size(), 0);
+        }
+        mFramebufferDepthDraws[mCurrentFramebuffer]++;
+    }
 
     // SOH [Enhancement] World light casting: also rebuild when the stencil mode changes. The decal
     // flag participates because DepthFunc below depends on it; without it a decal-only change kept the
@@ -1559,6 +1572,11 @@ void GfxRenderingAPIDX11::OnResize() {
 }
 
 void GfxRenderingAPIDX11::StartFrame() {
+    // Which framebuffer is the scene's is a per-frame fact, so it is re-learned every frame rather than
+    // remembered: a capture must not be able to read last frame's target.
+    std::fill(mFramebufferDepthDraws.begin(), mFramebufferDepthDraws.end(), 0);
+    mSceneFramebuffer = -1;
+    mSceneFramebufferDraws = 0;
     ShadowTimerFrameBegin();
     // Set per-frame constant buffer
     // SOH [Enhancement] mPerToonCb bound at slot b2 for the toon pixel shader and mPerShadowCb at b3 for
@@ -1600,6 +1618,15 @@ void GfxRenderingAPIDX11::FinishShadowCapture() {
     if (!mCapturePending) {
         return;
     }
+    // The scene's target is the one that took the most depth-writing draws this frame.
+    mSceneFramebuffer = -1;
+    mSceneFramebufferDraws = 0;
+    for (size_t i = 0; i < mFramebufferDepthDraws.size(); i++) {
+        if (mFramebufferDepthDraws[i] > mSceneFramebufferDraws) {
+            mSceneFramebufferDraws = mFramebufferDepthDraws[i];
+            mSceneFramebuffer = (int)i;
+        }
+    }
     auto cvars = Ship::Context::GetInstance()->GetConsoleVariables();
     nlohmann::json metadata = nlohmann::json::parse(mPendingCaptureMeta, nullptr, false);
     if (metadata.is_discarded()) {
@@ -1615,10 +1642,10 @@ void GfxRenderingAPIDX11::FinishShadowCapture() {
         if (!mCameraViewProjValid) {
             throw std::runtime_error("No camera matrix this frame");
         }
-        if (mCurrentFramebuffer < 0 || (size_t)mCurrentFramebuffer >= mFrameBuffers.size()) {
-            throw std::runtime_error("No current framebuffer");
+        if (mSceneFramebuffer < 0 || (size_t)mSceneFramebuffer >= mFrameBuffers.size()) {
+            throw std::runtime_error("No framebuffer took a depth-writing draw this frame");
         }
-        FramebufferDX11& fb = mFrameBuffers[mCurrentFramebuffer];
+        FramebufferDX11& fb = mFrameBuffers[mSceneFramebuffer];
         if (!fb.has_depth_buffer || fb.depth_stencil_view == nullptr) {
             throw std::runtime_error("The scene target carries no depth buffer");
         }
@@ -1640,6 +1667,10 @@ void GfxRenderingAPIDX11::FinishShadowCapture() {
         metadata["camera_size"] = { desc.Width, desc.Height };
         metadata["camera_view_proj"] = mCameraViewProj;
         metadata["camera_msaa"] = fb.msaa_level;
+        // Which target this came from and how much was drawn into it. A receiver that turns out empty is
+        // then answerable from the file itself, instead of costing another capture to find out.
+        metadata["camera_framebuffer"] = mSceneFramebuffer;
+        metadata["camera_draws"] = mSceneFramebufferDraws;
     } catch (const std::exception& error) {
         note = error.what();
         metadata["camera_layer"] = nullptr;
