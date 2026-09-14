@@ -510,7 +510,14 @@
 // is its own artefact. It is offered because on a still image at a moderate tap count it is clearly better
 // than the staircase, and because whether the trade is acceptable is a matter of taste that a constant
 // cannot settle.
-#define SHADOW_MAP_DEFAULT_JITTER 1
+//
+// Off by default, and the measurement that settled it: on the ShadowCap1 capture, reproduced per pixel in
+// tools/shadow-sim, technique 2 alone already reaches the same edge roughness this does (0.0647 against
+// 0.0645 on the second-difference metric) while leaving genuine cast shadow intact -- mean coverage on
+// receivers with a real occluder in front of them stays at 0.055, where switching this on lifts it to
+// 0.307. So it buys no smoothness technique 2 does not already buy, and pays for it by washing out a
+// quarter of the shadow, on top of the grain the paragraph above describes.
+#define SHADOW_MAP_DEFAULT_JITTER 0
 
 // Taps in the rotated pattern. Each is a full bilinear quad fetch, so this is the one knob here that costs
 // real bandwidth, and it is also what decides whether the dither reads as softness or as noise.
